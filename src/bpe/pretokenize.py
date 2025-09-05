@@ -5,11 +5,8 @@ from multiprocessing import Pool, cpu_count
 from collections import Counter
 
 
-special_tokens = [b"<|endoftext|>"]
-
-
 def pretokenize_chunk(task) -> Counter:
-    filepath, start, end, chunk_id = task
+    filepath, start, end, special_tokens, chunk_id = task
 
     # Split on special tokens so cannot tokenize across datasets
     # Read normally not as binary
@@ -23,7 +20,6 @@ def pretokenize_chunk(task) -> Counter:
         pretokenize_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
         pretokenized_dict = Counter()
         for chunk in split_chunks:
-
             split = re.finditer(
                 pretokenize_pattern, chunk.decode("utf-8", errors="ignore")
             )
@@ -39,9 +35,12 @@ def pretokenize_chunk(task) -> Counter:
         return pretokenized_dict
 
 
-def pretokenize(filepath: str) -> Counter:
+def pretokenize(filepath: str, special_tokens_input: list[str]) -> Counter:
+    # Encode to binary so always workign with binary in multiprocessing function
+    special_tokens = [i.encode("utf-8", errors="ignore") for i in special_tokens_input]
+
     with open(filepath, "rb") as f:
-        num_processes = 100
+        num_processes = 5
         special_token = b"<|endoftext|>"
         chunk_boundaries = find_chunk_boundaries(f, special_token, num_processes)
 
@@ -51,22 +50,23 @@ def pretokenize(filepath: str) -> Counter:
         for chunk_id in range(1, len(chunk_boundaries)):
             start = chunk_boundaries[chunk_id - 1]
             end = chunk_boundaries[chunk_id]
-            tasks.append((filepath, start, end, chunk_id))
+            tasks.append((filepath, start, end, special_tokens, chunk_id))
 
         # Start parallel processing
         with Pool(processes=cpu_count()) as pool:
             partials = pool.map(pretokenize_chunk, tasks)
 
         # Sum together into single dict
-        return sum(partials, Counter())
+        tuple_pretokenized = sum(partials, Counter())
+        return tuple_pretokenized
 
 
 def find_chunk_boundaries(
     file: BinaryIO, split_special_token: bytes, desired_num_chunks: int
 ) -> list[int]:
-    assert isinstance(
-        split_special_token, bytes
-    ), "split_special_token must be valid bytestring"
+    assert isinstance(split_special_token, bytes), (
+        "split_special_token must be valid bytestring"
+    )
 
     # Get file size
     file.seek(0, os.SEEK_END)
